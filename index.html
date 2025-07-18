@@ -13,7 +13,7 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            touch-action: manipulation; /* Cải thiện tương tác cảm ứng */
+            touch-action: manipulation;
         }
         body.dark {
             background-color: #0d1117;
@@ -112,7 +112,7 @@
             image-rendering: pixelated;
             user-select: none;
             -webkit-user-drag: none;
-            touch-action: pinch-zoom; /* Cho phép phóng to/thu nhỏ */
+            touch-action: pinch-zoom;
         }
         .viewer .image-name {
             position: absolute;
@@ -286,41 +286,81 @@
         let images = [];
         let imageNames = [];
         let imageSizes = [];
-        let imagePDFs = []; // Lưu dataURL của PDF
+        let imagePDFs = [];
         let totalPages = 0;
         let currentImageIndex = 0;
         let zoomLevel = 1;
 
-        // Kiểm tra dung lượng localStorage
-        function checkStorageAvailability() {
+        // Khởi tạo IndexedDB
+        const dbName = 'PDFGalleryDB';
+        const storeName = 'gallery';
+        let db;
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onupgradeneeded = (event) => {
+                    db = event.target.result;
+                    db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
+                };
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    resolve(db);
+                };
+                request.onerror = (event) => {
+                    console.error('Error opening IndexedDB:', event);
+                    alert('Failed to initialize storage. Please try again.');
+                    reject(event);
+                };
+            });
+        }
+
+        // Lưu dữ liệu vào IndexedDB
+        async function saveToDB() {
             try {
-                const test = 'test';
-                localStorage.setItem(test, test);
-                localStorage.removeItem(test);
-                return true;
+                const transaction = db.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                store.clear(); // Xóa dữ liệu cũ trước khi lưu mới
+                images.forEach((imgData, index) => {
+                    store.add({
+                        image: imgData,
+                        name: imageNames[index],
+                        size: imageSizes[index],
+                        pdfData: imagePDFs[index].pdfData,
+                        pageNum: imagePDFs[index].pageNum
+                    });
+                });
+                await new Promise((resolve, reject) => {
+                    transaction.oncomplete = resolve;
+                    transaction.onerror = () => reject('Error saving to IndexedDB');
+                });
+                localStorage.setItem('galleryTotalPages', totalPages); // Lưu totalPages vào localStorage
             } catch (e) {
-                console.error('localStorage not available or quota exceeded:', e);
-                alert('Cannot save data: Storage limit reached or localStorage is disabled.');
-                return false;
+                console.error('Error saving to IndexedDB:', e);
+                alert('Failed to save data. Storage may be full or unavailable.');
             }
         }
 
-        // Load từ localStorage
-        function loadFromStorage() {
+        // Tải dữ liệu từ IndexedDB
+        async function loadFromDB() {
             try {
-                const storedImages = localStorage.getItem('galleryImages');
-                const storedNames = localStorage.getItem('galleryImageNames');
-                const storedSizes = localStorage.getItem('galleryImageSizes');
-                const storedPDFs = localStorage.getItem('galleryPDFs');
-                const storedTotalPages = localStorage.getItem('galleryTotalPages');
-
-                if (storedImages) images = JSON.parse(storedImages) || [];
-                if (storedNames) imageNames = JSON.parse(storedNames) || [];
-                if (storedSizes) imageSizes = JSON.parse(storedSizes) || [];
-                if (storedPDFs) imagePDFs = JSON.parse(storedPDFs) || [];
-                if (storedTotalPages) totalPages = parseInt(storedTotalPages) || 0;
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                const request = store.getAll();
+                await new Promise((resolve, reject) => {
+                    request.onsuccess = () => {
+                        const data = request.result;
+                        images = data.map(item => item.image);
+                        imageNames = data.map(item => item.name);
+                        imageSizes = data.map(item => item.size);
+                        imagePDFs = data.map(item => ({ pdfData: item.pdfData, pageNum: item.pageNum }));
+                        totalPages = parseInt(localStorage.getItem('galleryTotalPages')) || 0;
+                        resolve();
+                    };
+                    request.onerror = () => reject('Error loading from IndexedDB');
+                });
             } catch (e) {
-                console.error('Error loading from localStorage:', e);
+                console.error('Error loading from IndexedDB:', e);
                 images = [];
                 imageNames = [];
                 imageSizes = [];
@@ -329,23 +369,8 @@
             }
         }
 
-        // Lưu vào localStorage
-        function saveToStorage() {
-            if (!checkStorageAvailability()) return;
-            try {
-                localStorage.setItem('galleryImages', JSON.stringify(images));
-                localStorage.setItem('galleryImageNames', JSON.stringify(imageNames));
-                localStorage.setItem('galleryImageSizes', JSON.stringify(imageSizes));
-                localStorage.setItem('galleryPDFs', JSON.stringify(imagePDFs));
-                localStorage.setItem('galleryTotalPages', totalPages);
-            } catch (e) {
-                console.error('Error saving to localStorage:', e);
-                alert('Storage limit reached. Please clear some data or use fewer PDFs.');
-            }
-        }
-
-        // Tải hình ảnh đã lưu vào gallery
-        function loadStoredImages() {
+        // Tải hình ảnh vào gallery
+        async function loadStoredImages() {
             gallery.innerHTML = '';
             images.forEach((imgData, index) => {
                 addImageToGallery(imgData, imageNames[index], imageSizes[index], imagePDFs[index].pageNum);
@@ -353,8 +378,12 @@
         }
 
         // Khởi tạo
-        loadFromStorage();
-        loadStoredImages();
+        async function init() {
+            await openDB();
+            await loadFromDB();
+            await loadStoredImages();
+        }
+        init();
 
         // Chuyển đổi giao diện sáng/tối
         themeToggle.addEventListener('click', () => {
@@ -379,27 +408,30 @@
             for (let file of files) {
                 await processPDF(file);
             }
-            saveToStorage();
-            loadStoredImages();
+            await saveToDB();
+            await loadStoredImages();
         });
 
         // Xóa toàn bộ dữ liệu
-        refreshButton.addEventListener('click', () => {
+        refreshButton.addEventListener('click', async () => {
             gallery.innerHTML = '';
             images = [];
             imageNames = [];
             imageSizes = [];
             imagePDFs = [];
             totalPages = 0;
-            localStorage.clear();
-            saveToStorage();
+            const transaction = db.transaction([storeName], 'readwrite');
+            const store = transaction.objectStore(storeName);
+            store.clear();
+            localStorage.removeItem('galleryTotalPages');
+            await new Promise(resolve => transaction.oncomplete = resolve);
         });
 
         // Xử lý PDF và chuyển thành hình ảnh
         async function processPDF(file) {
             try {
                 const arrayBuffer = await file.arrayBuffer();
-                const pdfDataUrl = arrayBufferToDataUrl(arrayBuffer); // Chuyển arrayBuffer thành dataURL
+                const pdfDataUrl = arrayBufferToDataUrl(arrayBuffer);
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 totalPages += pdf.numPages;
 
@@ -417,7 +449,7 @@
                         viewport: viewport
                     }).promise;
 
-                    const imgData = canvas.toDataURL('image/png', 0.7); // Giảm chất lượng để tiết kiệm dung lượng
+                    const imgData = canvas.toDataURL('image/png', 0.7);
                     addImageToGallery(imgData, `${file.name} - Page ${pageNum}`, file.size, pageNum);
                     imagePDFs.push({ pdfData: pdfDataUrl, pageNum });
                 }
