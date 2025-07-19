@@ -201,13 +201,13 @@
             background: #ffffff;
             border-bottom: 1px solid #d0d7de;
         }
-        .header button, .header label {
+        .header button {
             font-size: 1rem;
             padding: 0.6rem 1.2rem;
             border-radius: 6px;
         }
         @media (max-width: 640px) {
-            .header button, .header label {
+            .header button {
                 font-size: 1.1rem;
                 padding: 0.7rem 1.3rem;
             }
@@ -241,11 +241,7 @@
         </div>
         <div class="flex items-center gap-3">
             <button id="refreshButton" class="bg-gray-600 hover:bg-gray-700 text-white font-medium">Refresh</button>
-            <label for="pdfInput" class="bg-blue-600 hover:bg-blue-700 text-white font-medium cursor-pointer flex items-center gap-2">
-                <span class="text-lg">+</span> Add PDFs
-            </label>
             <button id="themeToggle" class="bg-gray-600 hover:bg-gray-700 text-white font-medium">🌙</button>
-            <input type="file" id="pdfInput" multiple accept=".pdf" class="hidden">
         </div>
     </div>
 
@@ -273,7 +269,6 @@
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
 
-        const pdfInput = document.getElementById('pdfInput');
         const refreshButton = document.getElementById('refreshButton');
         const themeToggle = document.getElementById('themeToggle');
         const gallery = document.getElementById('gallery');
@@ -285,158 +280,50 @@
         const footer = document.querySelector('.footer');
         let images = [];
         let imageNames = [];
-        let imageSizes = [];
         let imagePDFs = [];
         let totalPages = 0;
         let currentImageIndex = 0;
         let zoomLevel = 1;
 
-        // Khởi tạo IndexedDB
-        const dbName = 'PDFGalleryDB';
-        const storeName = 'gallery';
-        let db;
+        // Đường dẫn cơ sở tới thư mục Jar/ (thay đổi theo repository của bạn)
+        const baseUrl = window.location.origin + '/Jar/'; // Ví dụ: https://<username>.github.io/<repo>/Jar/
 
-        function openDB() {
-            return new Promise((resolve, reject) => {
-                const request = indexedDB.open(dbName, 1);
-                request.onupgradeneeded = (event) => {
-                    db = event.target.result;
-                    db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                };
-                request.onsuccess = (event) => {
-                    db = event.target.result;
-                    resolve(db);
-                };
-                request.onerror = (event) => {
-                    console.error('Error opening IndexedDB:', event);
-                    alert('Failed to initialize storage. Please ensure your browser supports IndexedDB.');
-                    reject(event);
-                };
-            });
-        }
-
-        // Lưu dữ liệu vào IndexedDB
-        async function saveToDB() {
+        // Tải danh sách PDF từ pdfs.json
+        async function loadPDFList() {
             try {
-                const transaction = db.transaction([storeName], 'readwrite');
-                const store = transaction.objectStore(storeName);
-                store.clear();
-                images.forEach((imgData, index) => {
-                    store.add({
-                        image: imgData,
-                        name: imageNames[index],
-                        size: imageSizes[index],
-                        pdfData: imagePDFs[index].pdfData,
-                        pageNum: imagePDFs[index].pageNum
-                    });
-                });
-                await new Promise((resolve, reject) => {
-                    transaction.oncomplete = resolve;
-                    transaction.onerror = () => reject('Error saving to IndexedDB');
-                });
-                localStorage.setItem('galleryTotalPages', totalPages);
+                const response = await fetch(baseUrl + 'pdfs.json');
+                if (!response.ok) throw new Error('Failed to load pdfs.json');
+                const pdfFiles = await response.json();
+                return pdfFiles;
             } catch (e) {
-                console.error('Error saving to IndexedDB:', e);
-                alert('Failed to save data. Please try uploading fewer files or check your storage.');
+                console.error('Error loading pdfs.json:', e);
+                alert('Failed to load PDF list. Please ensure pdfs.json exists in the Jar/ folder.');
+                return [];
             }
-        }
-
-        // Tải dữ liệu từ IndexedDB
-        async function loadFromDB() {
-            try {
-                const transaction = db.transaction([storeName], 'readonly');
-                const store = transaction.objectStore(storeName);
-                const request = store.getAll();
-                await new Promise((resolve, reject) => {
-                    request.onsuccess = () => {
-                        const data = request.result;
-                        images = data.map(item => item.image);
-                        imageNames = data.map(item => item.name);
-                        imageSizes = data.map(item => item.size);
-                        imagePDFs = data.map(item => ({ pdfData: item.pdfData, pageNum: item.pageNum }));
-                        totalPages = parseInt(localStorage.getItem('galleryTotalPages')) || 0;
-                        resolve();
-                    };
-                    request.onerror = () => reject('Error loading from IndexedDB');
-                });
-            } catch (e) {
-                console.error('Error loading from IndexedDB:', e);
-                images = [];
-                imageNames = [];
-                imageSizes = [];
-                imagePDFs = [];
-                totalPages = 0;
-            }
-        }
-
-        // Tải hình ảnh vào gallery
-        async function loadStoredImages() {
-            gallery.innerHTML = '';
-            images.forEach((imgData, index) => {
-                addImageToGallery(imgData, imageNames[index], imageSizes[index], imagePDFs[index].pageNum);
-            });
         }
 
         // Khởi tạo
         async function init() {
             try {
-                await openDB();
-                await loadFromDB();
+                const pdfFiles = await loadPDFList();
+                for (const fileName of pdfFiles) {
+                    await processPDF(fileName);
+                }
                 await loadStoredImages();
             } catch (e) {
                 console.error('Initialization failed:', e);
-                alert('Failed to load gallery. Please refresh and try again.');
+                alert('Failed to load PDFs. Please check the Jar/ folder and pdfs.json.');
             }
         }
         init();
 
-        // Chuyển đổi giao diện sáng/tối
-        themeToggle.addEventListener('click', () => {
-            document.body.classList.toggle('dark');
-            document.body.classList.toggle('light');
-            header.classList.toggle('dark');
-            header.classList.toggle('light');
-            footer.classList.toggle('dark');
-            footer.classList.toggle('light');
-            themeToggle.textContent = document.body.classList.contains('dark') ? '☀️' : '🌙';
-            themeToggle.classList.toggle('bg-gray-600');
-            themeToggle.classList.toggle('bg-green-500');
-            themeToggle.classList.toggle('hover:bg-gray-700');
-            themeToggle.classList.toggle('hover:bg-green-600');
-        });
-
-        // Xử lý tải PDF
-        pdfInput.addEventListener('change', async (event) => {
-            const files = Array.from(event.target.files).filter(file => file.name.endsWith('.pdf'));
-            if (files.length === 0) return;
-
-            for (let file of files) {
-                await processPDF(file);
-            }
-            await saveToDB();
-            await loadStoredImages();
-        });
-
-        // Xóa toàn bộ dữ liệu
-        refreshButton.addEventListener('click', async () => {
-            gallery.innerHTML = '';
-            images = [];
-            imageNames = [];
-            imageSizes = [];
-            imagePDFs = [];
-            totalPages = 0;
-            const transaction = db.transaction([storeName], 'readwrite');
-            const store = transaction.objectStore(storeName);
-            store.clear();
-            localStorage.removeItem('galleryTotalPages');
-            await new Promise(resolve => transaction.oncomplete = resolve);
-        });
-
-        // Xử lý PDF và chuyển thành hình ảnh
-        async function processPDF(file) {
+        // Tải và xử lý PDF từ URL
+        async function processPDF(fileName) {
             try {
-                const arrayBuffer = await file.arrayBuffer();
-                const pdfDataUrl = arrayBufferToDataUrl(arrayBuffer);
+                const response = await fetch(baseUrl + fileName);
+                if (!response.ok) throw new Error(`Failed to fetch ${fileName}`);
+                const arrayBuffer = await response.arrayBuffer();
+                const pdfUrl = baseUrl + fileName;
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 totalPages += pdf.numPages;
 
@@ -454,24 +341,18 @@
                         viewport: viewport
                     }).promise;
 
-                    const imgData = canvas.toDataURL('image/jpeg', 0.6); // Sử dụng JPEG để giảm dung lượng
-                    addImageToGallery(imgData, `${file.name} - Page ${pageNum}`, file.size, pageNum);
-                    imagePDFs.push({ pdfData: pdfDataUrl, pageNum });
+                    const imgData = canvas.toDataURL('image/jpeg', 0.6);
+                    addImageToGallery(imgData, `${fileName} - Page ${pageNum}`, pdfUrl, pageNum);
+                    imagePDFs.push({ pdfUrl, pageNum });
                 }
             } catch (e) {
-                console.error(`Error processing ${file.name}:`, e);
-                alert(`Error processing ${file.name}: ${e.message}`);
+                console.error(`Error processing ${fileName}:`, e);
+                alert(`Error processing ${fileName}: ${e.message}`);
             }
         }
 
-        // Chuyển arrayBuffer thành dataURL
-        function arrayBufferToDataUrl(arrayBuffer) {
-            const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
-            return URL.createObjectURL(blob);
-        }
-
         // Thêm hình ảnh vào gallery
-        function addImageToGallery(imgData, name, fileSize, pageNum) {
+        function addImageToGallery(imgData, name, pdfUrl, pageNum) {
             const img = document.createElement('img');
             img.src = imgData;
             img.className = 'w-full h-40 object-cover sm:h-48';
@@ -492,7 +373,7 @@
 
             images.push(imgData);
             imageNames.push(name);
-            imageSizes.push(fileSize);
+            imagePDFs.push({ pdfUrl, pageNum });
 
             galleryItem.addEventListener('click', () => {
                 currentImageIndex = images.indexOf(imgData);
@@ -502,6 +383,39 @@
 
             galleryItem.addEventListener('contextmenu', (e) => e.preventDefault());
         }
+
+        // Tải hình ảnh vào gallery
+        async function loadStoredImages() {
+            gallery.innerHTML = '';
+            images.forEach((imgData, index) => {
+                addImageToGallery(imgData, imageNames[index], imagePDFs[index].pdfUrl, imagePDFs[index].pageNum);
+            });
+        }
+
+        // Chuyển đổi giao diện sáng/tối
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('dark');
+            document.body.classList.toggle('light');
+            header.classList.toggle('dark');
+            header.classList.toggle('light');
+            footer.classList.toggle('dark');
+            footer.classList.toggle('light');
+            themeToggle.textContent = document.body.classList.contains('dark') ? '☀️' : '🌙';
+            themeToggle.classList.toggle('bg-gray-600');
+            themeToggle.classList.toggle('bg-green-500');
+            themeToggle.classList.toggle('hover:bg-gray-700');
+            themeToggle.classList.toggle('hover:bg-green-600');
+        });
+
+        // Xóa gallery và reload
+        refreshButton.addEventListener('click', async () => {
+            gallery.innerHTML = '';
+            images = [];
+            imageNames = [];
+            imagePDFs = [];
+            totalPages = 0;
+            await init();
+        });
 
         // Hiển thị viewer
         function showViewer() {
@@ -564,13 +478,13 @@
 
         // Tải PDF gốc
         function downloadPDF() {
-            const { pdfData } = imagePDFs[currentImageIndex];
-            if (!pdfData) {
-                alert('Original PDF not available. Please re-upload the PDF.');
+            const { pdfUrl } = imagePDFs[currentImageIndex];
+            if (!pdfUrl) {
+                alert('Original PDF not available.');
                 return;
             }
             const link = document.createElement('a');
-            link.href = pdfData;
+            link.href = pdfUrl;
             link.download = imageNames[currentImageIndex].split(' - ')[0];
             link.click();
         }
